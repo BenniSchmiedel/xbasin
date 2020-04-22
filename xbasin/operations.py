@@ -35,8 +35,23 @@ class Grid_ops:
                        'VW': (('z_f', 'y_f', 'x_c'),),
                        'FW': (('z_f', 'y_f', 'x_f'),)
                        }
+    def _data_skip(self,da,skip):
+        """
+        Returns a cut version of data vector da by skipping physical dimensions
 
-    def _get_position(self, da):
+
+        """
+        if type(skip) is int:
+            da = da[:skip] + da[skip + 1:]
+        elif type(skip) is list:
+            k = 0
+            for ind in skip:
+                da = da[:ind - k] + da[ind + 1 - k:]
+                k += 1
+        else:
+            raise Exception("""Input for "skip" not understood. Give integer or list.""")
+        return da
+    def _get_dims(self, da):
         """
         Returns the spatial position of the data variable of data vector.
         Note: Output does not include 't'-dimension
@@ -65,6 +80,43 @@ class Grid_ops:
 
         return pos
 
+    def _get_position(self, da, skip=None):
+        """
+        Returns the spatial position of the data variable of data vector.
+        Note: Output does not include 't'-dimension
+
+        :param da:  data variable or vector as xarray.Dataarray or List(xarray.Dataarray, ...)
+
+        :return:    position of data varaible or vector
+        """
+
+        # If da is a list (vector), return a list with the dimension tuple for every direction.
+        if skip != None:
+            da = self._data_skip(da, skip)
+        dims = self._get_dims(da)
+        if type(dims) is list:
+            positions=[]
+            for dim in dims:
+                for pos in self.points:
+                    if dim in self.points[pos]:
+                        positions.append(pos)
+                        break
+            if len(positions) != len(dims):
+                raise Exception("""Could not get an appropriate grip point position for the given dimensions:
+                                    %s """ % (dims,))
+            return positions
+        else:
+            position=None
+            for pos in self.points:
+                if dims in self.points[pos]:
+                    position = pos
+                    break
+            if position is None:
+                raise Exception("""Dimension does not match any know grip point position: %s """ % (dims, ))
+            return position
+
+
+
     def _get_missmatch(self, da, pos):
         """
         Returns the axes-name where a missmatch between the variable and a position is found.
@@ -92,7 +144,7 @@ class Grid_ops:
                 pass
             else:
                 ax_miss = 'X' if dims[ax][0] == 'x' else \
-                    'Y' if dims[ax][0] == 'y' else \
+                        'Y' if dims[ax][0] == 'y' else \
                         'Z' if dims[ax][0] == 'z' else None
                 if ax_miss == None:
                     raise Exception("""Axis %s does not match to any known dimensions""" % (da.dims[ax]))
@@ -116,14 +168,17 @@ class Grid_ops:
         if type(da) == list or type(da) == np.ndarray:
             if elements is None:
                 elements = [True] * len(da)
+            if type(output_position) is str:
+                output_position = [output_position] * len(da)
             da_out = []
             for i in range(len(da)):
                 if elements[i]:
                     element = da[i]
-                    if self._matching_pos(element, output_position):
+                    pos = output_position[i]
+                    if self._matching_pos(element, pos):
                         da_out.append(element)
                     else:
-                        missmatch = self._get_missmatch(element, output_position)
+                        missmatch = self._get_missmatch(element, pos)
                         da_out.append(self.interp(element, axis=missmatch))
                 else:
                     da_out.append(da[i])
@@ -137,7 +192,7 @@ class Grid_ops:
 
         return da_out
 
-    def _matching_pos(self, da, pos):
+    def _matching_pos(self, da, pos, skip=None):
         """
         Checks if the given data is on the indicated position
 
@@ -148,20 +203,23 @@ class Grid_ops:
         """
 
         if type(da) == list:
-            a_pos = self._get_position(da)
+            if skip != None:
+                da = self._data_skip(da,skip)
+            a_pos = self._get_dims(da)
+
             match = [any([expect == element for expect in self.points[pos]]) for element in a_pos]
             if all(match):
                 return True
             else:
                 return match  # raise Exception("""False elements %s do not match position %s""" % (match, pos))
         else:
-            a_pos = self._get_position(da)
-            if any([expect == a_pos for expect in self.points[pos]]):
+            a_pos = self._get_dims(da)
+            if a_pos in self.points[pos]:
                 return True
             else:
                 return False  # raise Exception("""The variable does not match position %s""" %pos)
 
-    def _matching_dim(self, da1, da2):
+    def _matching_dim(self, da1, da2, skip1=None, skip2=None):
         """
         Checks if the dimension of data variable da1 matches the dimension of data variable da2.
 
@@ -170,9 +228,14 @@ class Grid_ops:
 
         :return:        True, False or List(True/False, ...)
         """
-        # Get dimensions and cut 't' if given
-        da1_dims = self._get_position(da1)
-        da2_dims = self._get_position(da2)
+        # Get dimensions and cut 't' and skip if given
+        if skip1 != None:
+            da1 = self._data_skip(da1,skip1)
+        if skip2 != None:
+            da2 = self._data_skip(da2,skip2)
+
+        da1_dims = self._get_dims(da1)
+        da2_dims = self._get_dims(da2)
         if 't' in da1_dims:
             ind = da1_dims.index('t')
             da1_dims = da1_dims[:ind] + da1_dims[ind + 1:]
@@ -180,6 +243,8 @@ class Grid_ops:
             ind = da2_dims.index('t')
             da2_dims = da2_dims[:ind] + da2_dims[ind + 1:]
 
+
+        # Depending on type, make comparison
         if type(da1) is list and type(da2) is xr.DataArray:
             match = [da2_dims == da1_pos for da1_pos in da1_dims]
             if all(match):
@@ -193,8 +258,8 @@ class Grid_ops:
             else:
                 return match
         elif type(da1) is list and type(da2) is list:
-            if len(da1)==len(da2):
-                if da1_dims==da2_dims:
+            if len(da1) == len(da2):
+                if da1_dims == da2_dims:
                     return True
                 else:
                     return False
@@ -256,7 +321,7 @@ class Grid_ops:
         """
         dims = len(x) if len(x) == len(y) else False
         if dims == False:
-            raise Exception("Vectors dimensions do not match: x: %s != y:%s" % (len(x), len(y)))
+            raise Exception("Vector dimensions do not match: x: %s != y:%s" % (len(x), len(y)))
 
         c = 0
         for i in range(dims):
@@ -266,9 +331,9 @@ class Grid_ops:
 
     def cross(self, x, y, position_out=(None, None, None)):
         """
-        Performs a cross product for two vector fields.
+        Performs a cross product for two 3d vector fields.
 
-        x and y are vector fields as a type 'list' of scalar fields. Matching dimensions are required.
+        x and y are vector fields as a type 'list' or 'np.ndarray" of scalar fields. Matching dimensions are required.
 
         :param a:
         :param b:
@@ -280,11 +345,13 @@ class Grid_ops:
             raise Exception("Vectors dimensions do not match: x: %s != y:%s" % (len(x), len(y)))
 
         if dims != 3:
-            raise Exception("Operation is only implemented for 3D vectors")
+            raise Exception("Operation is only implemented for 3D vectors, but dimensions are: %s" %dims)
 
         c = [0] * 3
         c[0] = x[1] * y[2] - x[2] * y[1]
         c[1] = x[2] * y[0] - x[0] * y[2]
         c[2] = x[0] * y[1] - x[1] * y[0]
 
+        if type(x) == np.ndarray and type(y) == np.ndarray:
+            c = np.ndarray(c)
         return c

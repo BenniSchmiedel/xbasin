@@ -1,8 +1,9 @@
 import xarray as xr
 import xgcm
-from xbasin import remap_vertical
 import numpy as np
 import warnings
+import pytest
+from xbasin._remapping import remap_vertical
 
 _error = 1e-10
 _metrics = {
